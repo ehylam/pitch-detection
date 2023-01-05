@@ -120,10 +120,7 @@ function startPitchDetect() {
 	    analyser.fftSize = 2048;
 	    mediaStreamSource.connect( analyser );
 	    updatePitch();
-
-			setTimeout(() => {
-				setAmbientThreshold();
-			}, 3000);
+			setAmbientThreshold();
     }).catch((err) => {
         // always check for errors at the end.
         console.error(`${err.name}: ${err.message}`);
