@@ -31,7 +31,11 @@ var analyser = null;
 var theBuffer = null;
 var DEBUGCANVAS = null;
 var mediaStreamSource = null;
-var detectorElem, 
+let ambientSet = false;
+let ambientThreshold = 0;
+let initInterval = 0;
+let bufArr = [];
+var detectorElem,
 	canvasElem,
 	waveCanvas,
 	pitchElem,
@@ -56,8 +60,8 @@ window.onload = function() {
 	detuneElem = document.getElementById( "detune" );
 	detuneAmount = document.getElementById( "detune_amt" );
 
-	detectorElem.ondragenter = function () { 
-		this.classList.add("droptarget"); 
+	detectorElem.ondragenter = function () {
+		this.classList.add("droptarget");
 		return false; };
 	detectorElem.ondragleave = function () { this.classList.remove("droptarget"); return false; };
 	detectorElem.ondrop = function (e) {
@@ -69,7 +73,7 @@ window.onload = function() {
 	  	reader.onload = function (event) {
 	  		audioContext.decodeAudioData( event.target.result, function(buffer) {
 	    		theBuffer = buffer;
-	  		}, function(){alert("error loading!");} ); 
+	  		}, function(){alert("error loading!");} );
 
 	  	};
 	  	reader.onerror = function (event) {
@@ -78,20 +82,20 @@ window.onload = function() {
 	  	reader.readAsArrayBuffer(e.dataTransfer.files[0]);
 	  	return false;
 	};
-	
-	fetch('whistling3.ogg')
-		.then((response) => {
-			if (!response.ok) {
-				throw new Error(`HTTP error, status = ${response.status}`);
-			}
-			return response.arrayBuffer();
-		}).then((buffer) => audioContext.decodeAudioData(buffer)).then((decodedData) => {
-			theBuffer = decodedData;
-		});
+
+	// fetch('whistling3.ogg')
+	// 	.then((response) => {
+	// 		if (!response.ok) {
+	// 			throw new Error(`HTTP error, status = ${response.status}`);
+	// 		}
+	// 		return response.arrayBuffer();
+	// 	}).then((buffer) => audioContext.decodeAudioData(buffer)).then((decodedData) => {
+	// 		theBuffer = decodedData;
+	// 	});
 
 }
 
-function startPitchDetect() {	
+function startPitchDetect() {
     // grab an audio context
     audioContext = new AudioContext();
 
@@ -116,6 +120,10 @@ function startPitchDetect() {
 	    analyser.fftSize = 2048;
 	    mediaStreamSource.connect( analyser );
 	    updatePitch();
+
+			setTimeout(() => {
+				setAmbientThreshold();
+			}, 3000);
     }).catch((err) => {
         // always check for errors at the end.
         console.error(`${err.name}: ${err.message}`);
@@ -172,6 +180,7 @@ function toggleLiveInput() {
                 "optional": []
             },
         }, gotStream);
+
 }
 
 function togglePlayback() {
@@ -267,10 +276,10 @@ function autoCorrelate( buf, sampleRate ) {
 			// we need to do a curve fit on correlations[] around best_offset in order to better determine precise
 			// (anti-aliased) offset.
 
-			// we know best_offset >=1, 
-			// since foundGoodCorrelation cannot go to true until the second pass (offset=1), and 
+			// we know best_offset >=1,
+			// since foundGoodCorrelation cannot go to true until the second pass (offset=1), and
 			// we can't drop into this clause until the following pass (else if).
-			var shift = (correlations[best_offset+1] - correlations[best_offset-1])/correlations[best_offset];  
+			var shift = (correlations[best_offset+1] - correlations[best_offset-1])/correlations[best_offset];
 			return sampleRate/(best_offset+(8*shift));
 		}
 		lastCorrelation = correlation;
@@ -283,6 +292,26 @@ function autoCorrelate( buf, sampleRate ) {
 //	var best_frequency = sampleRate/best_offset;
 }
 */
+
+function noiseGate(signal, threshold) {
+  // Initialize an array to store the output signal
+  var output = [];
+
+  // Iterate over the input signal
+  for (var i = 0; i < signal.length; i++) {
+    // If the current sample is above the threshold, add it to the output signal
+    if (Math.abs(signal[i]) > threshold) {
+      output.push(signal[i]);
+    }
+    // Otherwise, add zero to the output signal
+    else {
+      output.push(0);
+    }
+  }
+
+  // Return the output signal
+  return output;
+}
 
 function autoCorrelate( buf, sampleRate ) {
 	// Implements the ACF2+ algorithm
@@ -329,10 +358,34 @@ function autoCorrelate( buf, sampleRate ) {
 	return sampleRate/T0;
 }
 
+function setAmbientThreshold() {
+	const interval = setInterval(() => {
+		initInterval++;
+		bufArr.push(...buf);
+
+		if(initInterval >= 3) {
+			clearInterval(interval);
+			let sum = 0;
+			let count = 0;
+			for(let i = 0; i < bufArr.length; i++) {
+				if(bufArr[i] > 0) {
+					sum += bufArr[i];
+					count++;
+				}
+			}
+
+
+			ambientThreshold = sum / count;
+			ambientSet = true;
+		}
+	}, 1000);
+}
+
 function updatePitch( time ) {
 	var cycles = new Array;
 	analyser.getFloatTimeDomainData( buf );
-	var ac = autoCorrelate( buf, audioContext.sampleRate );
+	let filteredBuf = noiseGate(buf, ambientThreshold);
+	var ac = autoCorrelate( filteredBuf, audioContext.sampleRate );
 	// TODO: Paint confidence meter on canvasElem here.
 
 	if (DEBUGCANVAS) {  // This draws the current waveform, useful for debugging
@@ -370,7 +423,9 @@ function updatePitch( time ) {
 	 	pitch = ac;
 	 	pitchElem.innerText = Math.round( pitch ) ;
 	 	var note =  noteFromPitch( pitch );
+
 		noteElem.innerHTML = noteStrings[note%12];
+		console.log(noteStrings[note%12]);
 		var detune = centsOffFromPitch( pitch, note );
 		if (detune == 0 ) {
 			detuneElem.className = "";
